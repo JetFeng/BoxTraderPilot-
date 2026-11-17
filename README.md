@@ -88,6 +88,15 @@ Schwab **每次刷新都会轮换 refresh token 并使旧值失效**。因此 Bo
 同一机会需再改善 `hysteresis_bp` 才会重复报警；任意两次报警间隔不小于 `cooldown`。
 行情数据变陈旧（>15 分钟）时暂停机会报警并推送一次数据陈旧通知，数据恢复后自动继续。
 
+`threshold_bp` / `confirm_rounds` / `hysteresis_bp` 三项**显式写 0 会被原样采用**（不写则取默认
+`-50` / `1` / `25`）——因为 0 对三者都是有效取值：
+
+| 配置 | 含义 |
+| --- | --- |
+| `threshold_bp: 0` | 只要 `spread_bp ≤ 0`（不比基准贵）即视为机会 |
+| `confirm_rounds: 0` | 不做确认轮次，首轮满足条件立即报警 |
+| `hysteresis_bp: 0` | 同一机会只要有任何改善就重报 |
+
 ```bash
 go run ./cmd/boxpilot -config config.yaml -watch
 ```

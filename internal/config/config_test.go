@@ -142,9 +142,9 @@ func TestParseWatchExplicit(t *testing.T) {
 	c := mutate(t, func(c *Config) {
 		c.Watch.Interval = "30s"
 		c.Watch.Cooldown = "10m"
-		c.Watch.ThresholdBP = -100
-		c.Watch.ConfirmRounds = 3
-		c.Watch.HysteresisBP = 10
+		c.Watch.ThresholdBP = f64(-100)
+		c.Watch.ConfirmRounds = iptr(3)
+		c.Watch.HysteresisBP = f64(10)
 		c.Watch.Channels = []string{"log", "whatsapp"}
 		c.Watch.WhatsApp.DBPath = "wa.db"
 		c.Watch.WhatsApp.Recipient = "14155550123"
@@ -162,6 +162,83 @@ func TestParseWatchExplicit(t *testing.T) {
 	}
 }
 
+// TestParseWatchExplicitZero pins the regression that an explicitly
+// configured zero must not be replaced by the default: zero is a
+// meaningful value for all three watch knobs.
+func TestParseWatchExplicitZero(t *testing.T) {
+	c := mutate(t, func(c *Config) {
+		c.Watch.ThresholdBP = f64(0)
+		c.Watch.ConfirmRounds = iptr(0)
+		c.Watch.HysteresisBP = f64(0)
+	})
+	o, err := c.ParseWatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.ThresholdBP != 0 {
+		t.Errorf("ThresholdBP = %v, want 0 (explicit zero honoured)", o.ThresholdBP)
+	}
+	if o.ConfirmRounds != 0 {
+		t.Errorf("ConfirmRounds = %v, want 0 (explicit zero honoured)", o.ConfirmRounds)
+	}
+	if o.HysteresisBP != 0 {
+		t.Errorf("HysteresisBP = %v, want 0 (explicit zero honoured)", o.HysteresisBP)
+	}
+}
+
+// TestParseWatchZeroFromYAML proves the zero survives the YAML round
+// trip, which is where the distinction between "absent" and "zero" is
+// actually made.
+func TestParseWatchZeroFromYAML(t *testing.T) {
+	yaml := validYAML + `
+watch:
+  interval: 30s
+  threshold_bp: 0
+  confirm_rounds: 0
+  hysteresis_bp: 0
+`
+	p := filepath.Join(t.TempDir(), "boxpilot.yaml")
+	if err := os.WriteFile(p, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := c.ParseWatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.ThresholdBP != 0 || o.ConfirmRounds != 0 || o.HysteresisBP != 0 {
+		t.Errorf("opts = %+v, want all three zero", o)
+	}
+}
+
+// TestParseWatchAbsentKeepsDefaults proves that leaving the fields out
+// of the config still yields the documented defaults.
+func TestParseWatchAbsentKeepsDefaults(t *testing.T) {
+	yaml := validYAML + `
+watch:
+  interval: 30s
+`
+	p := filepath.Join(t.TempDir(), "boxpilot.yaml")
+	if err := os.WriteFile(p, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := c.ParseWatch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.ThresholdBP != defaultThresholdBP || o.ConfirmRounds != defaultConfirmRounds ||
+		o.HysteresisBP != defaultHysteresisBP {
+		t.Errorf("opts = %+v, want the defaults", o)
+	}
+}
+
 func TestValidateWatchRejects(t *testing.T) {
 	cases := []struct {
 		name string
@@ -172,6 +249,8 @@ func TestValidateWatchRejects(t *testing.T) {
 		{"bad cooldown", func(c *Config) { c.Watch.Cooldown = "soon" }},
 		{"negative cooldown", func(c *Config) { c.Watch.Cooldown = "-5m" }},
 		{"unknown channel", func(c *Config) { c.Watch.Channels = []string{"pager"} }},
+		{"negative confirm rounds", func(c *Config) { c.Watch.ConfirmRounds = iptr(-1) }},
+		{"negative hysteresis", func(c *Config) { c.Watch.HysteresisBP = f64(-1) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -182,3 +261,7 @@ func TestValidateWatchRejects(t *testing.T) {
 		})
 	}
 }
+
+// f64 and iptr build pointer values for the optional watch fields.
+func f64(v float64) *float64 { return &v }
+func iptr(v int) *int        { return &v }

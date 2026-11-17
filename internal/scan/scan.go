@@ -132,9 +132,12 @@ func Enumerate(underlying box.Price, p Params, now time.Time) []box.Combo {
 	return out
 }
 
+// dedupeWidths returns the distinct widths, preserving order. The input
+// slice is never modified: reusing its backing array would silently
+// rewrite the caller's scan parameters.
 func dedupeWidths(in []int64) []int64 {
 	seen := make(map[int64]struct{}, len(in))
-	out := in[:0]
+	out := make([]int64, 0, len(in))
 	for _, w := range in {
 		if _, ok := seen[w]; ok {
 			continue
@@ -145,9 +148,11 @@ func dedupeWidths(in []int64) []int64 {
 	return out
 }
 
+// dedupeExpiries returns the distinct expiry dates, preserving order.
+// Like dedupeWidths it leaves the input slice untouched.
 func dedupeExpiries(in []time.Time) []time.Time {
 	seen := make(map[time.Time]struct{}, len(in))
-	out := in[:0]
+	out := make([]time.Time, 0, len(in))
 	for _, e := range in {
 		if _, ok := seen[e]; ok {
 			continue

@@ -32,10 +32,13 @@ output:
 watch:
   interval: 30s               # 轮询间隔（5s–1h）
   threshold_bp: -50           # spread_bp 小于等于该值即视为机会（负数=比基准便宜）
-  confirm_rounds: 2           # 条件连续满足 N 轮才首次报警（过滤噪声）
-  hysteresis_bp: 25           # 同一机会再次报警需再改善的基点数
+  confirm_rounds: 2           # 条件连续满足 N 轮才首次报警（过滤噪声）；0=立即报警
+  hysteresis_bp: 25           # 同一机会再次报警需再改善的基点数；0=有任何改善就重报
   cooldown: 1m                # 任意两次报警的最小间隔
   channels: [log]             # log | whatsapp（可多选）
   whatsapp:
     db_path: whatsapp_session.db  # 会话密钥库，等同凭证，禁止提交
     recipient: ""                 # E.164 号码（如 "14155550123"）；留空发给自己；环境变量 WHATSAPP_RECIPIENT 优先
+#
+# 注意：threshold_bp / confirm_rounds / hysteresis_bp 三项显式写 0 会被原样采用
+# （不写则取默认值 -50 / 1 / 25），因为 0 对三者都是有效取值。

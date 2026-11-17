@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"math/rand"
+	"slices"
 	"testing"
 	"time"
 
@@ -74,6 +75,49 @@ func TestEnumerateDedupesConfig(t *testing.T) {
 	combos := Enumerate(box.MustParsePrice("5912.30"), p, dt(2026, 11, 8))
 	if want := 236 * 2; len(combos) != want {
 		t.Errorf("len = %d, want %d (duplicates not removed)", len(combos), want)
+	}
+}
+
+// TestDedupeDoesNotMutateInput pins the regression that deduping must
+// not write into the caller's slice: reusing the backing array would
+// silently rewrite the scan parameters.
+func TestDedupeDoesNotMutateInput(t *testing.T) {
+	widths := []int64{250, 250, 500}
+	gotW := dedupeWidths(widths)
+	if len(gotW) != 2 || gotW[0] != 250 || gotW[1] != 500 {
+		t.Errorf("dedupeWidths = %v, want [250 500]", gotW)
+	}
+	if !slices.Equal(widths, []int64{250, 250, 500}) {
+		t.Errorf("dedupeWidths mutated its input: %v", widths)
+	}
+
+	exps := []time.Time{dt(2026, 12, 18), dt(2026, 12, 18), dt(2027, 1, 15)}
+	gotE := dedupeExpiries(exps)
+	if len(gotE) != 2 {
+		t.Errorf("dedupeExpiries = %v, want 2 entries", gotE)
+	}
+	if !slices.Equal(exps, []time.Time{dt(2026, 12, 18), dt(2026, 12, 18), dt(2027, 1, 15)}) {
+		t.Errorf("dedupeExpiries mutated its input: %v", exps)
+	}
+}
+
+// TestEnumerateDoesNotMutateParams checks the same property at the
+// level that matters to callers: scan.Params must survive a run intact.
+func TestEnumerateDoesNotMutateParams(t *testing.T) {
+	p := testParams()
+	p.Widths = []int64{250, 250, 500}
+	p.Expiries = []time.Time{dt(2026, 12, 18), dt(2026, 12, 18), dt(2027, 1, 15)}
+
+	widthsBefore := slices.Clone(p.Widths)
+	expsBefore := slices.Clone(p.Expiries)
+
+	Enumerate(box.MustParsePrice("5912.30"), p, dt(2026, 11, 8))
+
+	if !slices.Equal(p.Widths, widthsBefore) {
+		t.Errorf("Widths mutated: %v, want %v", p.Widths, widthsBefore)
+	}
+	if !slices.Equal(p.Expiries, expsBefore) {
+		t.Errorf("Expiries mutated: %v, want %v", p.Expiries, expsBefore)
 	}
 }
 

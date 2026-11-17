@@ -59,12 +59,25 @@ type OutputCfg struct {
 	Top     int    `yaml:"top"` // show top N rows; 0 = all
 }
 
+// Watch defaults applied when a field is absent from the config.
+const (
+	defaultThresholdBP   = -50.0
+	defaultConfirmRounds = 1
+	defaultHysteresisBP  = 25.0
+)
+
 // WatchCfg configures watch mode (activated with -watch on the CLI).
+//
+// ThresholdBP, ConfirmRounds and HysteresisBP are pointers so that an
+// explicitly configured zero can be told apart from an absent field.
+// Zero is a meaningful value for all three (alert on any spread below
+// the benchmark / no confirmation round / re-alert on any improvement),
+// so it must not be silently replaced by a default.
 type WatchCfg struct {
 	Interval      string      `yaml:"interval"`       // e.g. "30s"
-	ThresholdBP   float64     `yaml:"threshold_bp"`   // alert while spread_bp ≤ this
-	ConfirmRounds int         `yaml:"confirm_rounds"` // rounds the condition must hold
-	HysteresisBP  float64     `yaml:"hysteresis_bp"`  // re-alert improvement step
+	ThresholdBP   *float64    `yaml:"threshold_bp"`   // alert while spread_bp ≤ this
+	ConfirmRounds *int        `yaml:"confirm_rounds"` // rounds the condition must hold
+	HysteresisBP  *float64    `yaml:"hysteresis_bp"`  // re-alert improvement step
 	Cooldown      string      `yaml:"cooldown"`       // min interval between alerts
 	Channels      []string    `yaml:"channels"`       // whatsapp | log
 	WhatsApp      WhatsAppCfg `yaml:"whatsapp"`
@@ -87,22 +100,30 @@ type WatchOpts struct {
 
 // ParseWatch parses the watch section, applying defaults for unset
 // fields. The section may be entirely absent (zero value) — then the
-// defaults apply.
+// defaults apply. A field explicitly set to zero is honoured as-is.
 func (c *Config) ParseWatch() (WatchOpts, error) {
 	var o WatchOpts
 	w := c.Watch
-	o.ThresholdBP = w.ThresholdBP
-	if w.ThresholdBP == 0 {
-		o.ThresholdBP = -50
+
+	o.ThresholdBP = defaultThresholdBP
+	if w.ThresholdBP != nil {
+		o.ThresholdBP = *w.ThresholdBP
 	}
-	o.ConfirmRounds = w.ConfirmRounds
-	if w.ConfirmRounds == 0 {
-		o.ConfirmRounds = 1
+	o.ConfirmRounds = defaultConfirmRounds
+	if w.ConfirmRounds != nil {
+		o.ConfirmRounds = *w.ConfirmRounds
 	}
-	o.HysteresisBP = w.HysteresisBP
-	if w.HysteresisBP == 0 {
-		o.HysteresisBP = 25
+	o.HysteresisBP = defaultHysteresisBP
+	if w.HysteresisBP != nil {
+		o.HysteresisBP = *w.HysteresisBP
 	}
+	if o.ConfirmRounds < 0 {
+		return o, fmt.Errorf("watch.confirm_rounds: must be >= 0, got %d", o.ConfirmRounds)
+	}
+	if o.HysteresisBP < 0 {
+		return o, fmt.Errorf("watch.hysteresis_bp: must be >= 0, got %v", o.HysteresisBP)
+	}
+
 	interval := w.Interval
 	if interval == "" {
 		interval = "60s"
