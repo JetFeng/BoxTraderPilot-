@@ -78,6 +78,8 @@ type Stats struct {
 	Skipped   int // dropped silently (require_quotes=false)
 	Rejected  map[RejectReason]int
 	DataTimes []time.Time // quote/chain snapshot times
+	// Underlying is the index quote the K1 range was derived from.
+	Underlying box.Price
 }
 
 // SortByRate orders results by r_natural ascending (exact comparison).
@@ -226,6 +228,7 @@ func Execute(ctx context.Context, b broker.Broker, p Params, now time.Time) ([]R
 		return nil, stats, fmt.Errorf("underlying quote %s: %w", p.Symbol, err)
 	}
 	stats.DataTimes = append(stats.DataTimes, uq.Timestamp)
+	stats.Underlying = uq.Price
 
 	chains := make(map[string]broker.OptionChain)
 	for _, exp := range dedupeExpiries(p.Expiries) {

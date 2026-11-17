@@ -1,0 +1,9 @@
+# Keep the build context small and free of local credentials.
+.git
+.gitignore
+.idea
+.env
+*.db
+docs
+README.md
+*.md

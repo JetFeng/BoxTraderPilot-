@@ -307,3 +307,130 @@ func (failingBroker) GetQuote(context.Context, string) (broker.Quote, error) {
 func (failingBroker) GetOptionChain(context.Context, string, time.Time) (broker.OptionChain, error) {
 	return broker.OptionChain{}, errors.New("boom")
 }
+
+// --- Snapshot and runtime reconfiguration -------------------------------
+
+func TestSnapshotExposesTheLastRound(t *testing.T) {
+	fb := &fakeBroker{quotePrice: mp("5912.30"), ts: fixedNow, mid: [2][4]box.Price{cheapMids(), cheapMids()}, hs: mp("0.05")}
+	rec := &recordingAlerter{}
+	e := newTestEngine(fb, rec, testRules())
+
+	if err := e.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	snap := e.Snapshot()
+	if snap.LastRoundAt.IsZero() {
+		t.Error("LastRoundAt is zero")
+	}
+	if len(snap.Rows) == 0 {
+		t.Fatal("snapshot has no rows")
+	}
+	if snap.Stats.Valid != len(snap.Rows) {
+		t.Errorf("stats valid %d != rows %d", snap.Stats.Valid, len(snap.Rows))
+	}
+	if snap.Stats.Underlying != mp("5912.30") {
+		t.Errorf("underlying = %v, want 5912.30", snap.Stats.Underlying)
+	}
+	if snap.LastError != "" {
+		t.Errorf("LastError = %q, want empty", snap.LastError)
+	}
+	if snap.Benchmark != 0.065 {
+		t.Errorf("benchmark = %v", snap.Benchmark)
+	}
+	// cheapMids is ~37bp below the benchmark, so it clears the -50bp
+	// threshold and must show up as an opportunity.
+	if len(snap.Opportunities) == 0 {
+		t.Error("no opportunities in snapshot")
+	}
+	for _, o := range snap.Opportunities {
+		if o.Consecutive < 1 {
+			t.Errorf("opportunity %v has consecutive = %d, want >= 1", o, o.Consecutive)
+		}
+	}
+}
+
+func TestSnapshotIsEmptyBeforeTheFirstRound(t *testing.T) {
+	fb := &fakeBroker{quotePrice: mp("5912.30"), ts: fixedNow, mid: [2][4]box.Price{cheapMids(), cheapMids()}, hs: mp("0.05")}
+	e := newTestEngine(fb, &recordingAlerter{}, testRules())
+	snap := e.Snapshot()
+	if len(snap.Rows) != 0 {
+		t.Errorf("rows = %d, want 0 before the first round", len(snap.Rows))
+	}
+	if !snap.LastRoundAt.IsZero() {
+		t.Errorf("LastRoundAt = %v, want zero", snap.LastRoundAt)
+	}
+}
+
+func TestUpdateRulesTakesEffectImmediately(t *testing.T) {
+	fb := &fakeBroker{quotePrice: mp("5912.30"), ts: fixedNow, mid: [2][4]box.Price{cheapMids(), cheapMids()}, hs: mp("0.05")}
+	rec := &recordingAlerter{}
+	e := newTestEngine(fb, rec, testRules())
+
+	// At a -50bp threshold the cheap combo qualifies.
+	if err := e.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Snapshot().Opportunities) == 0 {
+		t.Fatal("expected an opportunity at the default threshold")
+	}
+
+	// A threshold below the actual spread excludes it again.
+	e.UpdateRules(Rules{ThresholdBP: -10000, ConfirmRounds: 1, HysteresisBP: 25}, 0.065)
+	if err := e.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	snap := e.Snapshot()
+	if snap.Rules.ThresholdBP != -10000 {
+		t.Errorf("threshold = %v, want -10000", snap.Rules.ThresholdBP)
+	}
+	if len(snap.Opportunities) != 0 {
+		t.Errorf("opportunities = %d, want 0 at a -10000bp threshold", len(snap.Opportunities))
+	}
+}
+
+func TestUpdateRulesRecomputesSpreadsAgainstANewBenchmark(t *testing.T) {
+	fb := &fakeBroker{quotePrice: mp("5912.30"), ts: fixedNow, mid: [2][4]box.Price{cheapMids(), cheapMids()}, hs: mp("0.05")}
+	e := newTestEngine(fb, &recordingAlerter{}, testRules())
+
+	if err := e.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := e.Snapshot().Opportunities
+	if len(before) == 0 {
+		t.Fatal("expected an opportunity at the default benchmark")
+	}
+
+	// Raising the benchmark makes the same combo look more attractive:
+	// spread_bp = r_natural − benchmark, so a higher benchmark pushes
+	// the spread further negative (the box borrows more cheaply than
+	// the alternative).
+	e.UpdateRules(testRules(), 0.10)
+	if err := e.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after := e.Snapshot().Opportunities
+	if len(after) == 0 {
+		t.Fatal("expected an opportunity at the raised benchmark")
+	}
+	if after[0].SpreadBP >= before[0].SpreadBP {
+		t.Errorf("spread %v did not fall after raising the benchmark (was %v)",
+			after[0].SpreadBP, before[0].SpreadBP)
+	}
+}
+
+func TestUpdateParamsSwapsTheScanScope(t *testing.T) {
+	fb := &fakeBroker{quotePrice: mp("5912.30"), ts: fixedNow, mid: [2][4]box.Price{cheapMids(), cheapMids()}, hs: mp("0.05")}
+	e := newTestEngine(fb, &recordingAlerter{}, testRules())
+
+	p := scanParams()
+	p.Widths = []int64{250}
+	e.UpdateParams(p)
+	if err := e.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range e.Snapshot().Rows {
+		if r.Combo.Width() != 250 {
+			t.Fatalf("width = %d, want 250", r.Combo.Width())
+		}
+	}
+}

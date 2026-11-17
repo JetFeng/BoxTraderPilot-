@@ -44,6 +44,31 @@ go test ./...
 go run ./cmd/fixturegen
 ```
 
+### Web 界面（本地）
+
+```bash
+# 用假数据起一个本地网页（零网络）
+go run ./cmd/boxpilotd -config config.example.yaml \
+  -fixture testdata/spx_chain_fixture.json
+# → listening on http://127.0.0.1:8080
+
+# 接 Schwab 实时行情
+export SCHWAB_CLIENT_ID=... SCHWAB_APP_SECRET=... SCHWAB_REFRESH_TOKEN=...
+go run ./cmd/boxpilotd -config config.yaml
+```
+
+浏览器打开 <http://127.0.0.1:8080>。界面包含：
+
+- **状态条** —— 标的现价、基准利率、有效/扫描数量、上次扫描时间、数据新鲜度指示灯、已报警次数
+- **机会看板** —— 当前满足触发条件（`spread_bp ≤ 阈值`）的组合及其 episode 状态（确认了几轮 / 是否已报警）
+- **扫描结果表** —— 与 CLI 同列，可点表头排序、可按行权价或到期日过滤、可展开看四腿 bid/ask/mid
+- **配置面板** —— 改基准利率、阈值、确认轮数、迟滞、轮询间隔、冷却、到期日，**立即生效，无需重启**
+
+**架构要点**：后台跑一个轮询引擎，HTTP 请求只读它的快照 —— 页面刷新**不会**触发扫描。
+这点很关键：每轮扫描对每个到期日都要拉一次整链，若让刷新触发扫描会瞬间打满 Schwab 速率限制。
+
+服务默认**只监听回环地址**。它持有券商凭证且自身不做认证，详见 [`docs/deploy.md`](docs/deploy.md)。
+
 ### 接入 Schwab 实时行情
 
 1. 在 <https://developer.schwab.com/> 注册应用，取得 App Key / App Secret，并完成一次 OAuth 授权拿到 Refresh Token。
@@ -141,19 +166,24 @@ go run ./cmd/boxpilot -config config.yaml -fixture testdata/spx_chain_fixture.js
 
 ```
 cmd/boxpilot/            # CLI 入口（快照扫描 / -watch 轮询报警）
+cmd/boxpilotd/           # Web 服务入口（状态条 / 结果表 / 机会看板 / 配置面板）
 cmd/fixturegen/          # 生成确定性假数据 fixture 的开发工具
-internal/box/            # 领域计算：整数价格、四腿定价、365 口径精确利率
-internal/scan/           # 组合枚举、过滤、排序、统计
-internal/watch/          # 轮询引擎：触发规则（阈值/确认/迟滞/冷却）、陈旧数据暂停
-internal/alert/          # 报警通道：Alerter 接口、log、WhatsApp（whatsmeow，-tags whatsapp）
-internal/config/         # YAML 配置加载与校验
-internal/broker/         # 只读 Broker 接口
-internal/broker/fixture/ # 离线 fixture 适配器（零网络）
-internal/broker/schwab/  # Schwab 只读适配器（全部网络调用集中于此）
-internal/report/         # table/csv/json 输出与摘要
-internal/logx/           # 脱敏日志
-internal/redline/        # 红线守护测试
-testdata/                # 假期权链 JSON fixture（非真实行情）
+internal/app/             # CLI 与 Web 共用的装配：broker / 扫描参数 / 报警通道
+internal/box/             # 领域计算：整数价格、四腿定价、365 口径精确利率
+internal/scan/            # 组合枚举、过滤、排序、统计
+internal/watch/           # 轮询引擎：触发规则（阈值/确认/迟滞/冷却）、陈旧数据暂停、状态快照
+internal/alert/           # 报警通道：Alerter 接口、log、WhatsApp（whatsmeow，-tags whatsapp）
+internal/config/          # YAML 配置加载与校验
+internal/broker/          # 只读 Broker 接口
+internal/broker/fixture/  # 离线 fixture 适配器（零网络）
+internal/broker/schwab/   # Schwab 只读适配器（全部网络调用集中于此）
+internal/report/          # table/csv/json 输出与摘要
+internal/web/             # Web 服务：JSON API + 内嵌前端资源（go:embed，零构建）
+internal/logx/            # 脱敏日志
+internal/redline/         # 红线守护测试
+testdata/                 # 假期权链 JSON fixture（非真实行情）
+docs/deploy.md            # 部署指南（Docker / systemd / 反向代理 / 安全清单）
+Dockerfile                # 生产镜像（多阶段，distroless，非 root）
 ```
 
 ## 安全红线（Phase 1，后续需求不得覆盖）
@@ -171,6 +201,8 @@ testdata/                # 假期权链 JSON fixture（非真实行情）
 3. **日志脱敏**：完整 Token/Secret 一律遮蔽（`internal/logx`，有单测构造假 Token 断言被遮蔽）。
 4. **只读重试**：行情请求失败指数退避最多 3 次；429 按 `Retry-After` 退避；仅限只读接口。
 5. **数据时效标注**：所有输出带行情时间戳；时差 > 15 分钟打印显著警告。
+6. **Web 层同样零下单**：`internal/web` 只读行情快照与配置，不引入任何交易路径；
+   默认只监听回环地址，绑定非回环地址时启动会打印醒目告警。
 
 ## 测试
 
@@ -178,8 +210,9 @@ testdata/                # 假期权链 JSON fixture（非真实行情）
 - 组合枚举（无重复、宽度一致、K1 区间、闰年 DTE）
 - 每条过滤规则正反用例；排序严格升序（精确有理数比较）
 - 脱敏、红线守护、Schwab 适配器（token 缓存/刷新、429/5xx 重试、字段解析、refresh token 轮换落盘与重启自愈）
-- watch 引擎（确认轮数、迟滞重报、episode 重置、全局冷却、陈旧数据暂停、状态 GC）
+- watch 引擎（确认轮数、迟滞重报、episode 重置、全局冷却、陈旧数据暂停、状态 GC、快照可观测、运行时改阈值/改基准）
 - 端到端：testdata 假 fixture 跑完整 CLI，断言表格/CSV/JSON 排序与数值、JSON/CSV 输出可被真正解析、时效警告、watch 配置校验
+- Web 层：页面与内嵌资源可访问、扫描结果含四腿明细、配置热更新即时生效、非法配置被拒且**不污染**现有状态、机会看板随阈值变化
 
 注意：默认构建（无 tag）不含 whatsmeow；`go build -tags whatsapp ./...` 与
 `go vet -tags whatsapp ./...` 应在 CI 中各跑一次，保证两种构建都可编译。
