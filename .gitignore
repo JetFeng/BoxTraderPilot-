@@ -1,0 +1,18 @@
+# Local credentials — never commit
+.env
+
+# OAuth refresh token store (contains a credential)
+schwab_refresh_token
+*.schwab_token*
+
+# WhatsApp session keys — treat like a credential
+whatsapp_session.db
+*.db
+
+# IDE metadata
+.idea/
+
+# Build artifacts
+/boxpilot
+/fixturegen
+*.out

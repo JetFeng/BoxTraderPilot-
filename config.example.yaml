@@ -1,0 +1,41 @@
+# BoxPilot scanner configuration — EXAMPLE ONLY.
+# Never put real credentials in this file; Schwab credentials are read
+# from the environment (see .env.example).
+
+symbol: SPX
+broker: schwab            # schwab | fixture (fixture = offline testdata)
+
+fixture:
+  path: testdata/spx_chain_fixture.json
+
+scan:
+  expiries: ["2026-12-18", "2027-01-15", "2027-03-19"]   # 到期日列表
+  widths: [250, 500, 1000]                               # 行权价间距列表（点）
+  k1_range_pct: 0.10      # K1 只取标的价格 ±10% 区间内的行权价
+  strike_step: 5          # SPX 行权价最小间隔
+  min_days_to_expiry: 21  # D 小于该值的组合跳过（年化噪声大）
+
+benchmark:
+  rate: 0.065             # 基准融资利率，必须在 (0, 0.5]
+
+filters:
+  max_leg_spread_pct: 0.15    # 单腿 (ask-bid)/mid 超过该比例的组合剔除
+  min_bid: 0.05               # 卖腿 bid 低于该值（点）视为无流动性，剔除
+  require_quotes: true        # 任一腿缺报价即剔除并计数
+
+output:
+  format: table               # table | csv | json
+  csv_path: ""                # 非空则同时导出 CSV
+  top: 30                     # 只显示排名前 N 个
+
+# 轮询监控模式（用 -watch 启动；不配置则仍可一键快照扫描）
+watch:
+  interval: 30s               # 轮询间隔（5s–1h）
+  threshold_bp: -50           # spread_bp 小于等于该值即视为机会（负数=比基准便宜）
+  confirm_rounds: 2           # 条件连续满足 N 轮才首次报警（过滤噪声）
+  hysteresis_bp: 25           # 同一机会再次报警需再改善的基点数
+  cooldown: 1m                # 任意两次报警的最小间隔
+  channels: [log]             # log | whatsapp（可多选）
+  whatsapp:
+    db_path: whatsapp_session.db  # 会话密钥库，等同凭证，禁止提交
+    recipient: ""                 # E.164 号码（如 "14155550123"）；留空发给自己；环境变量 WHATSAPP_RECIPIENT 优先
